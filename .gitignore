@@ -1,0 +1,9 @@
+.terraform/
+.venv/
+__pycache__/
+*.pyc
+*.log
+terraform.tfstate
+terraform.tfstate.backup
+.aws-sam/
+.env
