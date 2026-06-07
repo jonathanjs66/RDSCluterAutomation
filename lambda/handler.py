@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 
 import boto3
 from github import Github
@@ -76,7 +77,7 @@ def get_github_token():
 
     ssm = boto3.client("ssm")
     response = ssm.get_parameter(
-        Name="/rds-automation/github-token",
+        Name=os.environ.get("SSM_GITHUB_TOKEN_PATH", "/rds-automation/github-token"),
         WithDecryption=True,
     )
     return response["Parameter"]["Value"]
@@ -87,7 +88,7 @@ def create_github_pr(database_name, environment, tf_content):
     g = Github(token)
     repo = g.get_repo(GITHUB_REPO)
 
-    branch_name = f"rds/{database_name}-{environment}"
+    branch_name = f"rds/{database_name}-{environment}-{int(time.time())}"
     file_path = f"terraform/live/{database_name}-{environment}/main.tf"
 
     # Get the SHA of the base branch to branch off from
@@ -130,7 +131,13 @@ def lambda_handler(event, _context):
     logger.info("Received event: %s", json.dumps(event))
 
     record = event["Records"][0]
-    body = json.loads(record["body"])
+    raw = json.loads(record["body"])
+
+    # SNS wraps the message when delivering to SQS
+    if isinstance(raw, dict) and raw.get("Type") == "Notification":
+        body = json.loads(raw["Message"])
+    else:
+        body = raw
 
     validate_request(body)
 

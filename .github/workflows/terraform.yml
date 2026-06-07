@@ -1,0 +1,109 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'terraform/live/**'
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/live/**'
+
+jobs:
+
+  # ── Detect which terraform/live/* folder changed ─────────────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      dirs: ${{ steps.changes.outputs.dirs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find changed Terraform directories
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=${{ github.event.pull_request.base.sha }}
+            HEAD=${{ github.event.pull_request.head.sha }}
+          else
+            BASE=${{ github.event.before }}
+            HEAD=${{ github.sha }}
+          fi
+
+          DIRS=$(git diff --name-only $BASE $HEAD \
+            | grep '^terraform/live/' \
+            | sed 's|/[^/]*$||' \
+            | sort -u \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "dirs=$DIRS" >> $GITHUB_OUTPUT
+          echo "Changed directories: $DIRS"
+
+  # ── Validate + Plan (runs on every PR) ───────────────────────────
+  validate-and-plan:
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.dirs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: ${{ fromJson(needs.detect-changes.outputs.dirs) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ${{ matrix.dir }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        working-directory: ${{ matrix.dir }}
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: ${{ matrix.dir }}
+
+      - name: Terraform Plan
+        run: terraform plan -var="password=${{ secrets.TF_DB_PASSWORD }}"
+        working-directory: ${{ matrix.dir }}
+
+  # ── Apply (runs only when PR merges to main) ─────────────────────
+  apply:
+    needs: detect-changes
+    if: github.event_name == 'push' && needs.detect-changes.outputs.dirs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: ${{ fromJson(needs.detect-changes.outputs.dirs) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ${{ matrix.dir }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var="password=${{ secrets.TF_DB_PASSWORD }}"
+        working-directory: ${{ matrix.dir }}
